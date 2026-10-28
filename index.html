@@ -8,8 +8,10 @@
   body { margin: 0; background: #111; color: #ddd; font-family: system-ui, sans-serif; display: flex; flex-direction: column; align-items: center; }
   header { padding: 10px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: center; }
   canvas { image-rendering: pixelated; border: 1px solid #333; background: #000; }
+  #chart { image-rendering: auto; width: 800px; height: 200px; }
   button, input { font: inherit; }
   #stats { font-variant-numeric: tabular-nums; padding: 6px; }
+  #legend { font-size: 13px; display: flex; gap: 14px; padding-bottom: 6px; }
   footer { font-size: 12px; opacity: 0.6; padding: 8px; }
 </style>
 </head>
@@ -23,7 +25,15 @@
 </header>
 <canvas id="world" width="80" height="50" style="width:800px;height:500px"></canvas>
 <div id="stats"></div>
-<footer>Same seed, same history. M1: grass, grazers, seeded world.</footer>
+<canvas id="chart" width="800" height="200"></canvas>
+<div id="legend">
+  <span style="color:#f0c850">grazers</span>
+  <span style="color:#7fd3ff">speed gene</span>
+  <span style="color:#ff8fb1">sense gene</span>
+  <span style="color:#b6ff7f">metabolism gene</span>
+  <span style="opacity:0.6">each line scaled to its own range</span>
+</div>
+<footer>Same seed, same history. M2: genes mutate on breeding, population chart shows the drift.</footer>
 
 <script>
 // Seeded PRNG (mulberry32): same seed always gives the same world.
@@ -39,14 +49,21 @@ function makeRng(seed) {
 }
 
 const W = 80, H = 50;
+const MAX_GRAZERS = 400;   // hard cap so the sim stays fast
+const BREED_AT = 14;       // energy needed to breed
+const BREED_COST = 6;      // energy the parent pays (the child starts with 6)
+const SAMPLE_EVERY = 5;    // record history every N ticks
 const canvas = document.getElementById('world');
 const ctx = canvas.getContext('2d');
+const chart = document.getElementById('chart');
+const cctx = chart.getContext('2d');
 const statsEl = document.getElementById('stats');
 const seedInput = document.getElementById('seed');
 const speedInput = document.getElementById('speed');
 const pauseBtn = document.getElementById('pause');
 
 let rng, grass, grazers, tick, paused = false;
+let births = 0, deaths = 0, history = [];
 
 function hashSeed(str) {
   // Turns a text seed into a 32-bit number. Numbers pass through.
@@ -54,6 +71,14 @@ function hashSeed(str) {
   let h = 2166136261;
   for (const ch of str) h = Math.imul(h ^ ch.charCodeAt(0), 16777619);
   return h >>> 0;
+}
+
+function clamp(v, lo, hi) { return Math.min(hi, Math.max(lo, v)); }
+
+// Child genes: each gene moves a little, with a small chance of a bigger jump.
+function mutate(v, lo, hi, step) {
+  const jump = rng() < 0.05 ? step * 3 : step;
+  return clamp(v + (rng() * 2 - 1) * jump, lo, hi);
 }
 
 function newWorld(seedText) {
@@ -67,12 +92,16 @@ function newWorld(seedText) {
     grazers.push({
       x: Math.floor(rng() * W), y: Math.floor(rng() * H),
       energy: 10,
-      speed: 1 + Math.floor(rng() * 2),   // gene: cells per tick
-      sense: 3 + Math.floor(rng() * 4),   // gene: how far it can see grass
+      speed: 1 + Math.floor(rng() * 2),   // gene: cells per tick (1..2)
+      sense: 3 + Math.floor(rng() * 4),   // gene: how far it can see grass (3..6)
       metabolism: 0.08 + rng() * 0.08,    // gene: energy used per tick
     });
   }
   tick = 0;
+  births = 0;
+  deaths = 0;
+  history = [];
+  sample();
 }
 
 function wrap(v, max) { return (v + max) % max; }
@@ -83,6 +112,7 @@ function step() {
   for (let i = 0; i < grass.length; i++) grass[i] = Math.min(1, grass[i] + 0.01);
 
   const next = [];
+  const babies = [];
   for (const g of grazers) {
     // Look around for the richest grass cell in sense range.
     let bestX = g.x, bestY = g.y, bestVal = -1;
@@ -103,9 +133,36 @@ function step() {
     const eaten = Math.min(grass[idx], 0.5);
     grass[idx] -= eaten;
     g.energy += eaten * 4 - g.metabolism;
-    if (g.energy > 0) next.push(g);
+
+    if (g.energy <= 0) { deaths++; continue; }
+
+    // Breed when full: the child appears in a neighbouring cell with mutated genes.
+    if (g.energy >= BREED_AT && grazers.length + babies.length < MAX_GRAZERS) {
+      g.energy -= BREED_COST;
+      births++;
+      babies.push({
+        x: wrap(g.x + Math.floor(rng() * 3) - 1, W),
+        y: wrap(g.y + Math.floor(rng() * 3) - 1, H),
+        energy: BREED_COST,
+        speed: Math.round(mutate(g.speed, 1, 3, 0.5)),
+        sense: Math.round(mutate(g.sense, 2, 8, 1)),
+        metabolism: mutate(g.metabolism, 0.04, 0.2, 0.02),
+      });
+    }
+    next.push(g);
   }
-  grazers = next;
+  grazers = next.concat(babies);
+  if (tick % SAMPLE_EVERY === 0) sample();
+}
+
+function sample() {
+  const n = grazers.length;
+  const avg = (k) => n ? grazers.reduce((s, g) => s + g[k], 0) / n : 0;
+  history.push({
+    tick, n, births, deaths,
+    speed: avg('speed'), sense: avg('sense'), metabolism: avg('metabolism'),
+  });
+  if (history.length > 2000) history.shift();
 }
 
 function draw() {
@@ -122,8 +179,39 @@ function draw() {
     img.data[i] = 240; img.data[i + 1] = 200; img.data[i + 2] = 80;
   }
   ctx.putImageData(img, 0, 0);
-  const avgSpeed = grazers.length ? (grazers.reduce((s, g) => s + g.speed, 0) / grazers.length).toFixed(2) : '-';
-  statsEl.textContent = `tick ${tick} | grazers ${grazers.length} | avg speed gene ${avgSpeed}`;
+  drawChart();
+  const last = history[history.length - 1] || { speed: 0 };
+  statsEl.textContent =
+    `tick ${tick} | grazers ${grazers.length} | births ${births} | deaths ${deaths} | ` +
+    `speed ${last.speed.toFixed(2)} sense ${last.sense.toFixed(2)} metabolism ${last.metabolism.toFixed(3)}`;
+}
+
+function drawChart() {
+  const w = chart.width, h = chart.height, pad = 8;
+  cctx.fillStyle = '#000';
+  cctx.fillRect(0, 0, w, h);
+  if (history.length < 2) return;
+  const t0 = history[0].tick, t1 = history[history.length - 1].tick || 1;
+  const maxN = Math.max(MAX_GRAZERS, ...history.map(p => p.n));
+  // Each line is scaled to its own gene range so they all fit the same chart.
+  const lines = [
+    { c: '#f0c850', f: p => p.n / maxN },
+    { c: '#7fd3ff', f: p => (p.speed - 1) / 2 },
+    { c: '#ff8fb1', f: p => (p.sense - 2) / 6 },
+    { c: '#b6ff7f', f: p => (p.metabolism - 0.04) / 0.16 },
+  ];
+  const X = (p) => pad + (p.tick - t0) / (t1 - t0 || 1) * (w - 2 * pad);
+  const Y = (v) => h - pad - clamp(v, 0, 1) * (h - 2 * pad);
+  for (const L of lines) {
+    cctx.strokeStyle = L.c;
+    cctx.lineWidth = 2;
+    cctx.beginPath();
+    history.forEach((p, i) => {
+      const x = X(p), y = Y(L.f(p));
+      if (i === 0) cctx.moveTo(x, y); else cctx.lineTo(x, y);
+    });
+    cctx.stroke();
+  }
 }
 
 seedInput.addEventListener('change', () => { newWorld(seedInput.value.trim() || '1'); draw(); });
