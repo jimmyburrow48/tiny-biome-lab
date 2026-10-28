@@ -50,8 +50,10 @@ function makeRng(seed) {
 
 const W = 80, H = 50;
 const MAX_GRAZERS = 400;   // hard cap so the sim stays fast
-const BREED_AT = 14;       // energy needed to breed
-const BREED_COST = 6;      // energy the parent pays (the child starts with 6)
+const BREED_AT = 18;       // energy needed to breed
+const BREED_COST = 8;      // energy the parent pays (the child starts with 8)
+const REGROW = 0.006;     // grass regrowth per cell per tick
+const CROWD_COST = 0.15;   // extra energy each grazer loses per tick at full population
 const SAMPLE_EVERY = 5;    // record history every N ticks
 const canvas = document.getElementById('world');
 const ctx = canvas.getContext('2d');
@@ -109,7 +111,7 @@ function wrap(v, max) { return (v + max) % max; }
 function step() {
   tick++;
   // Grass regrows slowly.
-  for (let i = 0; i < grass.length; i++) grass[i] = Math.min(1, grass[i] + 0.01);
+  for (let i = 0; i < grass.length; i++) grass[i] = Math.min(1, grass[i] + REGROW);
 
   const next = [];
   const babies = [];
@@ -132,7 +134,8 @@ function step() {
     const idx = g.y * W + g.x;
     const eaten = Math.min(grass[idx], 0.5);
     grass[idx] -= eaten;
-    g.energy += eaten * 4 - g.metabolism;
+    // Crowding: a full population costs everyone a little more energy each tick.
+    g.energy += eaten * 2.5 - g.metabolism - CROWD_COST * grazers.length / MAX_GRAZERS;
 
     if (g.energy <= 0) { deaths++; continue; }
 
