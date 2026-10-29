@@ -49,6 +49,16 @@
   <span style="opacity:0.6">each line scaled to its own range</span>
 </div>
 <footer>Same seed, same history. M2: genes mutate on breeding. M3: red predators hunt grazers; export csv for the full history. M4: share link holds seed and tick (#seed@tick); drag the replay tick to rewind or fast-forward. M5: scenarios (drought, island, flood) with an auto-written caption; share links add @scenario.</footer>
+<section id="featured" style="max-width:800px;font-size:14px;padding:8px 0;line-height:1.45">
+  <strong>Featured runs</strong> <span style="opacity:0.6">(picked from a headless scan of 80 seeds per scenario; each link opens the run at tick 400)</span>
+  <ol>
+    <li><a href="#f4@400@normal">Boom, predators at the cap, slow trough</a>. Grazers boom to 278 by tick 75. Predators reach their cap of 30 by tick 100, while grazers fall to 43 by tick 300. Predators later dip to 21 at tick 350; over the next 25 ticks, grazers rise from 67 to 189.</li>
+    <li><a href="#f4@400@flood">Same seed, with floods</a>. The flood run matches the normal run until the first flood at tick 90, and floods recur every 90 ticks. The largest observed grazer drop is 47% within 15 ticks of a flood. At tick 400 grazers number 170, against 169 in the normal run, despite different population paths.</li>
+    <li><a href="#f14@400@island">Island that keeps cycling</a>. On this island seed, grazers fall from 166 at tick 50 to 39 at tick 150. Predators drop to 4 by tick 175, grazers rise to 108 by tick 200, and predators rise to 27 by tick 275 as grazers fall again. Across 80 island seeds, none reached a steady population during the observed runs.</li>
+    <li><a href="#f6@400@island">Island that dies out</a>. On this island seed, predators disappear by tick 200 and grazers reach zero by tick 300, despite total grass staying high at 1,875. The collapse is observed; its cause has not been tested.</li>
+    <li><a href="#f9@400@drought">Late drought peak</a>. On this drought seed, grazers peak at 149 on tick 100, later than the normal runs shown here (peaks at ticks 61 to 86). Grass falls to 252 by tick 100. Grazers decline to 32 by tick 225, then recover to 142 by tick 350.</li>
+  </ol>
+</section>
 
 <script>
 // Seeded PRNG (mulberry32): same seed always gives the same world.
@@ -491,6 +501,22 @@ function loop(ts) {
   }
   requestAnimationFrame(loop);
 }
+
+// Featured runs: open a run from its link without reloading the page (newWorld writes its own hash, so set ours last).
+function openRun(seed, tick, scen) {
+  seedInput.value = seed;
+  scenEl.value = scen;
+  newWorld(seed, scen);
+  rewindTo(tick);
+  paused = true; pauseBtn.textContent = 'play'; // stop at the featured tick so the text matches the view
+  location.hash = linkFor(tick);
+  draw();
+}
+document.querySelectorAll('#featured a').forEach(a => a.addEventListener('click', (e) => {
+  e.preventDefault();
+  const [s, t, sc] = a.getAttribute('href').slice(1).split('@');
+  openRun(s, Number(t), sc);
+}));
 
 // Share link format: #seed, #seed@tick or #seed@tick@scenario (the tick is capped so the rebuild stays quick).
 const [startSeed, startTick, startScen] = decodeURIComponent(location.hash.slice(1)).split('@');

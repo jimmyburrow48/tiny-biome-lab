@@ -8,7 +8,7 @@ function stubEl() {
     addEventListener() {}, };
 }
 const els = {};
-global.document = { getElementById: (id) => (els[id] = els[id] || stubEl()) };
+global.document = { getElementById: (id) => (els[id] = els[id] || stubEl()), querySelectorAll: () => [] };
 global.location = { hash: '' };
 global.requestAnimationFrame = () => {};
 const run = new Function(js + '\nreturn { newWorld, step, get history() { return history; }, get grazers() { return grazers; }, get births() { return births; }, get deaths() { return deaths; }, get tick() { return tick; } };');

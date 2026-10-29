@@ -8,7 +8,7 @@ function stubEl() {
     addEventListener() {} };
 }
 const els = {};
-global.document = { getElementById: (id) => (els[id] = els[id] || stubEl()) };
+global.document = { getElementById: (id) => (els[id] = els[id] || stubEl()), querySelectorAll: () => [] };
 global.location = { hash: '' };
 global.requestAnimationFrame = () => {};
 const exposeSrc = [
