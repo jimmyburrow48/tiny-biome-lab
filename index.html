@@ -142,7 +142,7 @@ function newWorld(seedText, scenName) {
   maxTick = 0;
   seedInput.value = seedText;
   scenEl.value = curScen;
-  location.hash = curScen === 'normal' ? seedText : linkFor(0);
+  setHash(curScen === 'normal' ? seedText : linkFor(0));
   rng = makeRng(hashSeed(seedText));
   // Island: land is an ellipse in the middle, water everywhere else (no rng, so it is fixed by the scenario).
   land = new Uint8Array(W * H);
@@ -509,7 +509,7 @@ function openRun(seed, tick, scen) {
   newWorld(seed, scen);
   rewindTo(tick);
   paused = true; pauseBtn.textContent = 'play'; // stop at the featured tick so the text matches the view
-  location.hash = linkFor(tick);
+  setHash(linkFor(tick));
   draw();
 }
 document.querySelectorAll('#featured a').forEach(a => a.addEventListener('click', (e) => {
@@ -519,11 +519,19 @@ document.querySelectorAll('#featured a').forEach(a => a.addEventListener('click'
 }));
 
 // Share link format: #seed, #seed@tick or #seed@tick@scenario (the tick is capped so the rebuild stays quick).
-const [startSeed, startTick, startScen] = decodeURIComponent(location.hash.slice(1)).split('@');
-newWorld(startSeed || '42', startScen);
-rewindTo(Math.min(Number(startTick) || 0, 2000));
-draw();
+let lastHash = '';
+function setHash(h) { location.hash = h; lastHash = location.hash; } // remember our own writes so the listener below skips them
+function loadFromHash() {
+  const [seedText, tickText, scenText] = decodeURIComponent(location.hash.slice(1)).split('@');
+  newWorld(seedText || '42', scenText);
+  rewindTo(Math.min(Number(tickText) || 0, 2000));
+  if (tick > 0) setHash(linkFor(tick)); // newWorld resets the url, so put the tick back
+  draw();
+}
+loadFromHash();
 requestAnimationFrame(loop);
+// a share link typed or pasted into an open tab loads the same way as a fresh start.
+window.addEventListener('hashchange', () => { if (location.hash !== lastHash) loadFromHash(); });
 </script>
 </body>
 </html>

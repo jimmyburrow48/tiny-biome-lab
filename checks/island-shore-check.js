@@ -11,6 +11,7 @@ function stubEl() {
 const els = {};
 global.document = { getElementById: (id) => (els[id] = els[id] || stubEl()), querySelectorAll: () => [] };
 global.location = { hash: '' };
+global.window = { addEventListener() {} };
 global.requestAnimationFrame = () => {};
 const run = new Function(js + '\nreturn { newWorld, step, W, H, get grazers() { return grazers; }, get predators() { return predators; }, get grass() { return grass; }, get land() { return land; } };');
 

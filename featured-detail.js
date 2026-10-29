@@ -10,6 +10,7 @@ function stubEl() {
 const els = {};
 global.document = { getElementById: (id) => (els[id] = els[id] || stubEl()), querySelectorAll: () => [] };
 global.location = { hash: '' };
+global.window = { addEventListener() {} };
 global.requestAnimationFrame = () => {};
 const run = new Function(js + '\nreturn { newWorld, step, get grazers() { return grazers; }, get predators() { return predators; }, get grass() { return grass; }, get floods() { return floods; } };');
 const picks = JSON.parse(process.argv[2]);

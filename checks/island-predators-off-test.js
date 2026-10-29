@@ -13,6 +13,7 @@ function stubEl() {
 const els = {};
 global.document = { getElementById: (id) => (els[id] = els[id] || stubEl()), querySelectorAll: () => [] };
 global.location = { hash: '' };
+global.window = { addEventListener() {} };
 global.requestAnimationFrame = () => {};
 for (const [name, js] of Object.entries(variants)) {
   const run = new Function(js + '\nreturn { newWorld, step, get grazers() { return grazers; }, get predators() { return predators; } };');

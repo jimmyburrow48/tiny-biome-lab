@@ -9,6 +9,7 @@ function stubEl() {
 const els = {};
 global.document = { getElementById: (id) => (els[id] = els[id] || stubEl()), querySelectorAll: () => [] };
 global.location = { hash: '' };
+global.window = { addEventListener() {} };
 global.requestAnimationFrame = () => {};
 const exposeSrc = [
   'return {',
