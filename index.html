@@ -8,7 +8,8 @@
   body { margin: 0; background: #111; color: #ddd; font-family: system-ui, sans-serif; display: flex; flex-direction: column; align-items: center; }
   header { padding: 10px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: center; }
   canvas { image-rendering: pixelated; border: 1px solid #333; background: #000; }
-  #chart { image-rendering: auto; width: 800px; height: 200px; }
+  #chart, #cmpA, #cmpB { image-rendering: auto; }
+  #chart { width: 800px; height: 200px; }
   button, input { font: inherit; }
   #stats { font-variant-numeric: tabular-nums; padding: 6px; }
   #legend { font-size: 13px; display: flex; gap: 14px; padding-bottom: 6px; }
@@ -49,6 +50,22 @@
   <span style="color:#b6ff7f">metabolism gene</span>
   <span style="opacity:0.6">each line scaled to its own range; dashed line = the tick that kind first died out</span>
 </div>
+<section id="compare" style="max-width:800px;font-size:14px;padding:6px 0;text-align:center">
+  <strong>Same seed, two island starts</strong> <span id="cmpSeed" style="opacity:0.6"></span>
+  <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;padding-top:6px">
+    <div style="width:390px">
+      <div>island: two predators at start (current rule)</div>
+      <canvas id="cmpA" width="390" height="200" style="width:390px;height:200px"></canvas>
+      <div id="cmpTextA" style="font-size:13px;min-height:36px;padding-top:4px"></div>
+    </div>
+    <div style="width:390px">
+      <div>island-old: four predators at start</div>
+      <canvas id="cmpB" width="390" height="200" style="width:390px;height:200px"></canvas>
+      <div id="cmpTextB" style="font-size:13px;min-height:36px;padding-top:4px"></div>
+    </div>
+  </div>
+  <div style="font-size:12px;opacity:0.6;padding-top:4px">Both panels: ticks 0 to 400 on the same scale. Yellow = grazers (out of 400), red = predators (out of 30). Dashed line = the tick that kind first died out. This does not change the live run above.</div>
+</section>
 <footer>Same seed, same history. M2: genes mutate on breeding. M3: red predators hunt grazers; export csv for the full history. M4: share link holds seed and tick (#seed@tick); drag the replay tick to rewind or fast-forward. M5: scenarios (drought, island, flood) with an auto-written caption; share links add @scenario. Island runs changed on 2026-10-28 (two predators at the start, so island links made before then open a different run); island-old opens the island as it was. Free to play. Tips are optional (pay what you want, $0 is fine): <a href="https://jimmyburrow48.itch.io/tiny-biome-lab">jimmyburrow48.itch.io/tiny-biome-lab</a></footer>
 <section id="featured" style="max-width:800px;font-size:14px;padding:8px 0;line-height:1.45">
   <strong>Featured runs</strong> <span style="opacity:0.6">(picked from a headless scan of 80 seeds per scenario; each link opens the run at tick 400)</span>
@@ -141,15 +158,17 @@ function mutate(v, lo, hi, step) {
   return clamp(v + (rng() * 2 - 1) * jump, lo, hi);
 }
 
-function newWorld(seedText, scenName) {
+function newWorld(seedText, scenName, quiet) { // quiet: a scratch run (startRun), so the inputs and the url stay as they are
   seedText = String(seedText).replace(/[@#]/g, ''); // these characters separate the share link parts
   curSeed = seedText;
   curScen = SCENARIOS[scenName] ? scenName : 'normal';
   scen = SCENARIOS[curScen];
   maxTick = 0;
-  seedInput.value = seedText;
-  scenEl.value = curScen;
-  setHash(curScen === 'normal' ? seedText : linkFor(0));
+  if (!quiet) {
+    seedInput.value = seedText;
+    scenEl.value = curScen;
+    setHash(curScen === 'normal' ? seedText : linkFor(0));
+  }
   rng = makeRng(hashSeed(seedText));
   // Island: land is an ellipse in the middle, water everywhere else (no rng, so it is fixed by the scenario).
   land = new Uint8Array(W * H);
@@ -483,10 +502,75 @@ function drawChart() {
   });
 }
 
-seedInput.addEventListener('change', () => { newWorld(seedInput.value.trim() || '1', scenEl.value); draw(); });
+// Side-by-side: the same seed under the two island starts, ticks 0 to 400.
+// Each run is a scratch copy: save the live sim, run the other start, read the history, restore the live sim.
+const COMPARE_TO = 400;
+function startRun(seedText, scenName) {
+  const keep = saveState();
+  newWorld(seedText, scenName, true);
+  const startPred = predators.length;
+  while (tick < COMPARE_TO) step();
+  const run = {
+    startPred, grazersNow: grazers.length, predNow: predators.length,
+    grazerGone, predGone,
+    rows: history.map(h => ({ tick: h.tick, n: h.n, pred: h.pred })),
+  };
+  restoreState(keep);
+  return run;
+}
+function drawRun(canvasEl, run) {
+  const c = canvasEl.getContext('2d');
+  const w = canvasEl.width, h = canvasEl.height, pad = 8;
+  c.fillStyle = '#000';
+  c.fillRect(0, 0, w, h);
+  const X = (t) => pad + t / COMPARE_TO * (w - 2 * pad);
+  const Y = (v) => h - pad - clamp(v, 0, 1) * (h - 2 * pad);
+  const lines = [
+    { c: '#f0c850', f: p => p.n / MAX_GRAZERS },
+    { c: '#ff4d4d', f: p => p.pred / PRED_CAP },
+  ];
+  for (const L of lines) {
+    c.strokeStyle = L.c;
+    c.lineWidth = 2;
+    c.beginPath();
+    run.rows.forEach((p, i) => {
+      const x = X(p.tick), y = Y(L.f(p));
+      if (i === 0) c.moveTo(x, y); else c.lineTo(x, y);
+    });
+    c.stroke();
+  }
+  const marks = [[run.grazerGone, '#f0c850', 'grazers gone'], [run.predGone, '#ff4d4d', 'predators gone']];
+  marks.forEach(([t, col, label], i) => {
+    if (t === null) return;
+    const x = X(t), right = x > w / 2;
+    c.strokeStyle = col; c.lineWidth = 1; c.setLineDash([4, 4]);
+    c.beginPath(); c.moveTo(x, pad); c.lineTo(x, h - pad); c.stroke();
+    c.setLineDash([]);
+    c.fillStyle = col; c.font = '12px system-ui, sans-serif';
+    c.textAlign = right ? 'right' : 'left';
+    c.fillText(`${label} t${t}`, x + (right ? -4 : 4), pad + 12 + i * 14);
+    c.textAlign = 'left';
+  });
+}
+function runText(run) {
+  const g = run.grazerGone !== null ? `Grazers gone at tick ${run.grazerGone}.` : `Grazers still alive at tick ${COMPARE_TO}: ${run.grazersNow}.`;
+  const p = run.predGone !== null ? `Predators gone from tick ${run.predGone}.` : `Predators still alive: ${run.predNow}.`;
+  return `${run.startPred} predators at start. ${g} ${p}`;
+}
+function updateCompare() {
+  const a = startRun(curSeed, 'island');
+  const b = startRun(curSeed, 'island-old');
+  document.getElementById('cmpSeed').textContent = `(seed ${curSeed})`;
+  drawRun(document.getElementById('cmpA'), a);
+  drawRun(document.getElementById('cmpB'), b);
+  document.getElementById('cmpTextA').textContent = runText(a);
+  document.getElementById('cmpTextB').textContent = runText(b);
+}
+
+seedInput.addEventListener('change', () => { newWorld(seedInput.value.trim() || '1', scenEl.value); updateCompare(); draw(); });
 scenEl.addEventListener('change', () => { newWorld(seedInput.value.trim() || '1', scenEl.value); draw(); });
 document.getElementById('newSeed').addEventListener('click', () => {
-  newWorld(String(Math.floor(Math.random() * 1e9)), scenEl.value); draw();
+  newWorld(String(Math.floor(Math.random() * 1e9)), scenEl.value); updateCompare(); draw();
 });
 pauseBtn.addEventListener('click', () => {
   paused = !paused; pauseBtn.textContent = paused ? 'play' : 'pause';
@@ -566,6 +650,7 @@ function openRun(seed, tick, scen) {
   rewindTo(tick);
   paused = true; pauseBtn.textContent = 'play'; // stop at the featured tick so the text matches the view
   setHash(linkFor(tick));
+  updateCompare();
   draw();
 }
 document.querySelectorAll('#featured a').forEach(a => a.addEventListener('click', (e) => {
@@ -585,6 +670,7 @@ function loadFromHash() {
     paused = true; pauseBtn.textContent = 'play';
     setHash(linkFor(tick)); // newWorld resets the url, so put the tick back
   }
+  updateCompare();
   draw();
 }
 loadFromHash();
