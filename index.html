@@ -23,6 +23,7 @@
     <option value="normal">normal</option>
     <option value="drought">drought</option>
     <option value="island">island</option>
+    <option value="island-old">island-old</option>
     <option value="flood">flood</option>
   </select></label>
   <button id="newSeed">new seed</button>
@@ -48,14 +49,14 @@
   <span style="color:#b6ff7f">metabolism gene</span>
   <span style="opacity:0.6">each line scaled to its own range</span>
 </div>
-<footer>Same seed, same history. M2: genes mutate on breeding. M3: red predators hunt grazers; export csv for the full history. M4: share link holds seed and tick (#seed@tick); drag the replay tick to rewind or fast-forward. M5: scenarios (drought, island, flood) with an auto-written caption; share links add @scenario.</footer>
+<footer>Same seed, same history. M2: genes mutate on breeding. M3: red predators hunt grazers; export csv for the full history. M4: share link holds seed and tick (#seed@tick); drag the replay tick to rewind or fast-forward. M5: scenarios (drought, island, flood) with an auto-written caption; share links add @scenario. Island runs changed on 2026-10-28 (two predators at the start, so island links made before then open a different run); island-old opens the island as it was.</footer>
 <section id="featured" style="max-width:800px;font-size:14px;padding:8px 0;line-height:1.45">
   <strong>Featured runs</strong> <span style="opacity:0.6">(picked from a headless scan of 80 seeds per scenario; each link opens the run at tick 400)</span>
   <ol>
     <li><a href="#f4@400@normal">Boom, predators at the cap, slow trough</a>. Grazers boom to 278 by tick 75. Predators reach their cap of 30 by tick 100, while grazers fall to 43 by tick 300. Predators later dip to 21 at tick 350; over the next 25 ticks, grazers rise from 67 to 189.</li>
     <li><a href="#f4@400@flood">Same seed, with floods</a>. The flood run matches the normal run until the first flood at tick 90, and floods recur every 90 ticks. The largest observed grazer drop is 47% within 15 ticks of a flood. At tick 400 grazers number 170, against 169 in the normal run, despite different population paths.</li>
-    <li><a href="#f14@400@island">Island that keeps cycling</a>. On this island seed, grazers fall from 166 at tick 50 to 39 at tick 150. Predators drop to 4 by tick 175, grazers rise to 108 by tick 200, and predators rise to 27 by tick 275 as grazers fall again. Across 80 island seeds, none reached a steady population during the observed runs.</li>
-    <li><a href="#f6@400@island">Island that dies out</a>. On this island seed, predators peak at 30 around tick 75, when total grass is still about 150 (a full island holds about 1,880). Grazers fall from 166 at tick 50 to 21 at tick 100, predators are gone by tick 200, and grazers reach zero by tick 300, even though total grass is back to 1,875. At ticks 150, 200 and 250, every grazer sampled stood on the shore, where their next step toward the richest grass would enter water. Letting blocked grazers step along the other axis raised die-outs from 12 to 21 of 80 island seeds, so the shore is not the main cause. With predators switched off, none of the 80 island seeds died out, so predator pressure is needed for these collapses. Why the crash comes at that point is still open.</li>
+    <li><a href="#f15@400@island">Island that settles</a>. On this island seed, grazers fall to 22 at tick 150, then rebuild to 212 by tick 225. Predators are gone from tick 167 on. From tick 225 to 400 grazers stay between 165 and 218, while total grass stays low (88 at tick 300, 115 at tick 400; a full island holds about 1,880). Across the 80 island seeds scanned, 5 held a steady population over ticks 301 to 400 like this one (lowest count at least 20, and the swing at most a quarter of the average).</li>
+    <li><a href="#f19@400@island">Island that dies out</a>. On this island seed, predators reach 30 at tick 99 while grazers fall from 187 at tick 49 to 61 at tick 100. The last grazer dies at tick 147, and predators are gone from tick 186 on. Total grass is 639 at tick 147 and back to 1,881 by tick 400, so the grass is still there after the grazers are gone. Why the grazers collapse at that point is not known yet. Across the 80 island seeds scanned, 7 died out by tick 400.</li>
     <li><a href="#f9@400@drought">Late drought peak</a>. On this drought seed, grazers peak at 149 on tick 100, later than the normal runs shown here (peaks at ticks 61 to 86). Grass falls to 252 by tick 100. Grazers decline to 32 by tick 225, then recover to 142 by tick 350.</li>
   </ol>
 </section>
@@ -63,14 +64,16 @@
 <script>
 // Seeded PRNG (mulberry32): same seed always gives the same world.
 function makeRng(seed) {
-  let a = seed >>> 0;
-  return function () {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
+  const st = { a: seed >>> 0 }; // state lives on an object so the checks can read it (rng.state())
+  const next = function () {
+    st.a = (st.a + 0x6d2b79f5) >>> 0;
+    let t = st.a;
     t = Math.imul(t ^ (t >>> 15), t | 1);
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
+  next.state = () => st.a;
+  return next;
 }
 
 const W = 80, H = 50;
@@ -81,7 +84,9 @@ const SCENARIOS = {
   // Hand-tuned starts. normal is the original world, so old share links replay the same.
   normal:  { label: 'normal',  regrow: 0.006,  grassStart: 1,    island: false, flood: false },
   drought: { label: 'drought', regrow: 0.0025, grassStart: 0.35, island: false, flood: false },
-  island:  { label: 'island',  regrow: 0.006,  grassStart: 1,    island: true,  flood: false },
+  island:  { label: 'island',  regrow: 0.006,  grassStart: 1,    island: true,  flood: false, startPred: 2 },
+  // island-old is the island before 2026-10-28 (four predators at start). Kept so its runs can still be reproduced.
+  'island-old': { label: 'island-old', regrow: 0.006, grassStart: 1, island: true, flood: false },
   flood:   { label: 'flood',   regrow: 0.006,  grassStart: 1,    island: false, flood: true },
 };
 const FLOOD_EVERY = 90;    // ticks between floods
@@ -179,6 +184,9 @@ function newWorld(seedText, scenName) {
       sense: 3 + Math.floor(rng() * 3),   // gene: how far it can smell a grazer (3..5)
     });
   }
+  // Island starts with two predators: all four are still drawn above, so the rng stream is the same as before.
+  // Measured in checks/island-samespawn-paired.js (island die-outs 14.0% -> 8.5% over 1200 seeds, same seeds).
+  if (scen.startPred) predators.length = scen.startPred;
   tick = 0;
   births = 0;
   deaths = 0;
@@ -209,6 +217,32 @@ function rewindTo(target) {
     maxTick = keep;
   }
   while (tick < target) step();
+}
+
+// Save/restore: a deep copy of every mutable sim field, so a second copy can pick up mid-run (checks/lockstep-check.js uses this).
+// Keep this list in step with the globals at the top: a new field that changes the run must be added here too.
+function saveState() {
+  return {
+    curSeed, curScen, maxTick, tick,
+    rng: rng.state(),
+    births, deaths, eaten, pDeaths, floods,
+    lastFlood: lastFlood ? { rows: lastFlood.rows.slice(), tick: lastFlood.tick } : null,
+    land: Array.from(land), grass: Array.from(grass), // plain arrays: a typed array would turn into an object in JSON
+    grazers: grazers.map(g => ({ ...g })),
+    predators: predators.map(p => ({ ...p })),
+    history: history.map(h => ({ ...h })),
+  };
+}
+function restoreState(s) {
+  curSeed = s.curSeed; curScen = s.curScen; scen = SCENARIOS[curScen];
+  maxTick = s.maxTick; tick = s.tick;
+  rng = makeRng(s.rng); // makeRng keeps its argument as the raw 32-bit state, so this resumes the exact sequence
+  births = s.births; deaths = s.deaths; eaten = s.eaten; pDeaths = s.pDeaths; floods = s.floods;
+  lastFlood = s.lastFlood ? { rows: s.lastFlood.rows.slice(), tick: s.lastFlood.tick } : null;
+  land = Uint8Array.from(s.land); grass = Float32Array.from(s.grass); // back to the typed arrays the sim uses
+  grazers = s.grazers.map(g => ({ ...g }));
+  predators = s.predators.map(p => ({ ...p }));
+  history = s.history.map(h => ({ ...h }));
 }
 
 function step() {
@@ -525,7 +559,10 @@ function loadFromHash() {
   const [seedText, tickText, scenText] = decodeURIComponent(location.hash.slice(1)).split('@');
   newWorld(seedText || '42', scenText);
   rewindTo(Math.min(Number(tickText) || 0, 2000));
-  if (tick > 0) setHash(linkFor(tick)); // newWorld resets the url, so put the tick back
+  if (tick > 0) { // a link to a tick opens paused there, like a featured link (a link without a tick keeps playing)
+    paused = true; pauseBtn.textContent = 'play';
+    setHash(linkFor(tick)); // newWorld resets the url, so put the tick back
+  }
   draw();
 }
 loadFromHash();
