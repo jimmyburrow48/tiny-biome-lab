@@ -1,0 +1,4 @@
+seeds 1200
+island-old (4 predators at start): died out 168 (14.0%)
+island (2 predators at start):     died out 102 (8.5%)
+both died 16 | only old died 152 | only new died 86
