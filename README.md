@@ -10,7 +10,7 @@ Scenarios: normal, drought, island and flood. Each share link holds the seed, th
 
 The page lists the featured runs under the footer (seven entries as of 2026-10-29, the two-starts one included). Each has a short explanation and a link that opens the run paused at tick 400. They were picked from an 80-seed scan per scenario (`featured.js`). The timelines behind the explanations come from `featured-detail.js`.
 
-Island f6 is the run that dies out. Its checks are in `checks/`: the grazers that stand on the shore, the other-axis movement test, and the predators-off test.
+Island f19 is the run that dies out: the last grazer dies at tick 147. f6 used to die out, but under the current predator rule it does not (19 grazers at tick 400). The island checks in `checks/` were first run on f6 under the old rule, so the shore, other-axis and predators-off tests describe that old run.
 
 ## Checks
 
