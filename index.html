@@ -19,6 +19,12 @@
 <header>
   <strong>Tiny Biome Lab</strong>
   <label>seed <input id="seed" size="10"></label>
+  <label>scenario <select id="scenario">
+    <option value="normal">normal</option>
+    <option value="drought">drought</option>
+    <option value="island">island</option>
+    <option value="flood">flood</option>
+  </select></label>
   <button id="newSeed">new seed</button>
   <button id="pause">pause</button>
   <button id="csv">export csv</button>
@@ -32,6 +38,7 @@
 </div>
 <canvas id="world" width="80" height="50" style="width:800px;height:500px"></canvas>
 <div id="stats"></div>
+<div id="caption" style="font-size:14px;max-width:800px;min-height:40px;padding:4px 0;text-align:center"></div>
 <canvas id="chart" width="800" height="200"></canvas>
 <div id="legend">
   <span style="color:#f0c850">grazers</span>
@@ -41,7 +48,7 @@
   <span style="color:#b6ff7f">metabolism gene</span>
   <span style="opacity:0.6">each line scaled to its own range</span>
 </div>
-<footer>Same seed, same history. M2: genes mutate on breeding. M3: red predators hunt grazers; export csv for the full history. M4: share link holds seed and tick (#seed@tick); drag the replay tick to rewind or fast-forward.</footer>
+<footer>Same seed, same history. M2: genes mutate on breeding. M3: red predators hunt grazers; export csv for the full history. M4: share link holds seed and tick (#seed@tick); drag the replay tick to rewind or fast-forward. M5: scenarios (drought, island, flood) with an auto-written caption; share links add @scenario.</footer>
 
 <script>
 // Seeded PRNG (mulberry32): same seed always gives the same world.
@@ -60,7 +67,15 @@ const W = 80, H = 50;
 const MAX_GRAZERS = 400;   // hard cap so the sim stays fast
 const BREED_AT = 18;       // energy needed to breed
 const BREED_COST = 8;      // energy the parent pays (the child starts with 8)
-const REGROW = 0.006;     // grass regrowth per cell per tick
+const SCENARIOS = {
+  // Hand-tuned starts. normal is the original world, so old share links replay the same.
+  normal:  { label: 'normal',  regrow: 0.006,  grassStart: 1,    island: false, flood: false },
+  drought: { label: 'drought', regrow: 0.0025, grassStart: 0.35, island: false, flood: false },
+  island:  { label: 'island',  regrow: 0.006,  grassStart: 1,    island: true,  flood: false },
+  flood:   { label: 'flood',   regrow: 0.006,  grassStart: 1,    island: false, flood: true },
+};
+const FLOOD_EVERY = 90;    // ticks between floods
+const FLOOD_ROWS = 8;      // rows covered by one flood
 const CROWD_COST = 0.15;   // extra energy each grazer loses per tick at full population
 const SAMPLE_EVERY = 5;    // record history every N ticks
 const PRED_CAP = 30;       // hard cap on predators
@@ -79,10 +94,19 @@ const speedInput = document.getElementById('speed');
 const pauseBtn = document.getElementById('pause');
 const scrubEl = document.getElementById('scrub');
 const noteEl = document.getElementById('note');
+const scenEl = document.getElementById('scenario');
+const captionEl = document.getElementById('caption');
 
 let rng, grass, grazers, predators, tick, paused = false;
 let births = 0, deaths = 0, eaten = 0, pDeaths = 0, history = [];
-let curSeed = '42', maxTick = 0; // maxTick: furthest tick reached for this seed (the replay limit)
+let land, floods = 0, lastFlood = null;
+let curSeed = '42', curScen = 'normal', maxTick = 0; // maxTick: furthest tick reached for this seed (the replay limit)
+let scen = SCENARIOS.normal;
+
+// Share link: seed@tick, plus @scenario when it is not normal.
+function linkFor(t) {
+  return curSeed + '@' + t + (curScen !== 'normal' ? '@' + curScen : '');
+}
 
 function hashSeed(str) {
   // Turns a text seed into a 32-bit number. Numbers pass through.
@@ -100,19 +124,35 @@ function mutate(v, lo, hi, step) {
   return clamp(v + (rng() * 2 - 1) * jump, lo, hi);
 }
 
-function newWorld(seedText) {
+function newWorld(seedText, scenName) {
   seedText = String(seedText).replace(/[@#]/g, ''); // these characters separate the share link parts
   curSeed = seedText;
+  curScen = SCENARIOS[scenName] ? scenName : 'normal';
+  scen = SCENARIOS[curScen];
   maxTick = 0;
   seedInput.value = seedText;
-  location.hash = seedText;
+  scenEl.value = curScen;
+  location.hash = curScen === 'normal' ? seedText : linkFor(0);
   rng = makeRng(hashSeed(seedText));
+  // Island: land is an ellipse in the middle, water everywhere else (no rng, so it is fixed by the scenario).
+  land = new Uint8Array(W * H);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const dx = (x - 40) / 30, dy = (y - 25) / 20;
+    land[y * W + x] = !scen.island || dx * dx + dy * dy <= 1 ? 1 : 0;
+  }
   grass = new Float32Array(W * H);
-  for (let i = 0; i < grass.length; i++) grass[i] = rng();
+  for (let i = 0; i < grass.length; i++) grass[i] = land[i] ? rng() * scen.grassStart : 0;
+  // Start on land: re-roll a cell that is water (only happens on the island).
+  const spawn = () => {
+    let x, y;
+    do { x = Math.floor(rng() * W); y = Math.floor(rng() * H); } while (!land[y * W + x]);
+    return { x, y };
+  };
   grazers = [];
   for (let i = 0; i < 60; i++) {
+    const at = spawn();
     grazers.push({
-      x: Math.floor(rng() * W), y: Math.floor(rng() * H),
+      x: at.x, y: at.y,
       energy: 10,
       speed: 1 + Math.floor(rng() * 2),   // gene: cells per tick (1..2)
       sense: 3 + Math.floor(rng() * 4),   // gene: how far it can see grass (3..6)
@@ -121,8 +161,9 @@ function newWorld(seedText) {
   }
   predators = [];
   for (let i = 0; i < 4; i++) {
+    const at = spawn();
     predators.push({
-      x: Math.floor(rng() * W), y: Math.floor(rng() * H),
+      x: at.x, y: at.y,
       energy: 12,
       speed: 1 + Math.floor(rng() * 2),   // gene: cells per tick (1..2), costs more energy when fast
       sense: 3 + Math.floor(rng() * 3),   // gene: how far it can smell a grazer (3..5)
@@ -133,11 +174,16 @@ function newWorld(seedText) {
   deaths = 0;
   eaten = 0;
   pDeaths = 0;
+  floods = 0;
+  lastFlood = null;
   history = [];
   sample();
 }
 
 function wrap(v, max) { return (v + max) % max; }
+
+// Can a grazer or predator stand on this cell? Water blocks everything on the island.
+function walkable(x, y) { return land[y * W + x] === 1; }
 
 // Shortest signed distance between two cells on the wrapped grid.
 function wrapDelta(d, max) {
@@ -149,7 +195,7 @@ function wrapDelta(d, max) {
 function rewindTo(target) {
   if (target < tick) {
     const keep = maxTick;
-    newWorld(curSeed);
+    newWorld(curSeed, curScen);
     maxTick = keep;
   }
   while (tick < target) step();
@@ -158,12 +204,22 @@ function rewindTo(target) {
 function step() {
   tick++;
   if (tick > maxTick) maxTick = tick;
-  // Grass regrows slowly.
-  for (let i = 0; i < grass.length; i++) grass[i] = Math.min(1, grass[i] + REGROW);
+  // Grass regrows slowly (never on water).
+  for (let i = 0; i < grass.length; i++) if (land[i]) grass[i] = Math.min(1, grass[i] + scen.regrow);
+  // Flood: a random band of rows loses its grass, and grazers in it lose energy.
+  let floodRows = null;
+  if (scen.flood && tick % FLOOD_EVERY === 0) {
+    const r0 = Math.floor(rng() * (H - FLOOD_ROWS));
+    floodRows = [r0, r0 + FLOOD_ROWS - 1];
+    for (let y = floodRows[0]; y <= floodRows[1]; y++) for (let x = 0; x < W; x++) grass[y * W + x] = 0;
+    lastFlood = { rows: floodRows, tick };
+    floods++;
+  }
 
   const next = [];
   const babies = [];
   for (const g of grazers) {
+    if (floodRows && g.y >= floodRows[0] && g.y <= floodRows[1]) g.energy -= 4;
     // Look around for the richest grass cell in sense range.
     let bestX = g.x, bestY = g.y, bestVal = -1;
     for (let dy = -g.sense; dy <= g.sense; dy++) {
@@ -173,10 +229,14 @@ function step() {
         if (v > bestVal) { bestVal = v; bestX = x; bestY = y; }
       }
     }
-    // Move toward it, up to speed cells per tick.
+    // Move toward it, up to speed cells per tick (stops at water).
     for (let s = 0; s < g.speed; s++) {
-      if (g.x !== bestX) g.x = wrap(g.x + Math.sign(bestX - g.x), W);
-      else if (g.y !== bestY) g.y = wrap(g.y + Math.sign(bestY - g.y), H);
+      let nx = g.x, ny = g.y;
+      if (g.x !== bestX) nx = wrap(g.x + Math.sign(bestX - g.x), W);
+      else if (g.y !== bestY) ny = wrap(g.y + Math.sign(bestY - g.y), H);
+      else break;
+      if (!walkable(nx, ny)) break;
+      g.x = nx; g.y = ny;
     }
     // Eat what is here.
     const idx = g.y * W + g.x;
@@ -191,9 +251,10 @@ function step() {
     if (g.energy >= BREED_AT && grazers.length + babies.length < MAX_GRAZERS) {
       g.energy -= BREED_COST;
       births++;
+      const bx = wrap(g.x + Math.floor(rng() * 3) - 1, W), by = wrap(g.y + Math.floor(rng() * 3) - 1, H);
       babies.push({
-        x: wrap(g.x + Math.floor(rng() * 3) - 1, W),
-        y: wrap(g.y + Math.floor(rng() * 3) - 1, H),
+        x: walkable(bx, by) ? bx : g.x,   // a baby born in water stays with its parent
+        y: walkable(bx, by) ? by : g.y,
         energy: BREED_COST,
         speed: Math.round(mutate(g.speed, 1, 3, 0.5)),
         sense: Math.round(mutate(g.sense, 2, 8, 1)),
@@ -219,18 +280,20 @@ function predatorStep() {
       if (d <= p.sense && d < bestD) { bestD = d; target = g; }
     }
     for (let s = 0; s < p.speed; s++) {
+      let nx = p.x, ny = p.y;
       if (target) {
         const dx = wrapDelta(target.x - p.x, W), dy = wrapDelta(target.y - p.y, H);
         if (dx === 0 && dy === 0) break;
-        if (Math.abs(dx) >= Math.abs(dy)) p.x = wrap(p.x + Math.sign(dx), W);
-        else p.y = wrap(p.y + Math.sign(dy), H);
+        if (Math.abs(dx) >= Math.abs(dy)) nx = wrap(p.x + Math.sign(dx), W);
+        else ny = wrap(p.y + Math.sign(dy), H);
       } else {
         const r = rng();
-        if (r < 0.25) p.x = wrap(p.x + 1, W);
-        else if (r < 0.5) p.x = wrap(p.x - 1, W);
-        else if (r < 0.75) p.y = wrap(p.y + 1, H);
-        else p.y = wrap(p.y - 1, H);
+        if (r < 0.25) nx = wrap(p.x + 1, W);
+        else if (r < 0.5) nx = wrap(p.x - 1, W);
+        else if (r < 0.75) ny = wrap(p.y + 1, H);
+        else ny = wrap(p.y - 1, H);
       }
+      if (walkable(nx, ny)) { p.x = nx; p.y = ny; } // water blocks the move
     }
     // Eat a grazer within one cell (the victim is removed at once, so no double meals).
     const i = grazers.findIndex(g =>
@@ -242,9 +305,10 @@ function predatorStep() {
     // Cap check uses the old count, so survivors plus babies can never pass PRED_CAP.
     if (p.energy >= PRED_AT && predators.length + babies.length < PRED_CAP) {
       p.energy -= PRED_COST;
+      const bx = wrap(p.x + Math.floor(rng() * 3) - 1, W), by = wrap(p.y + Math.floor(rng() * 3) - 1, H);
       babies.push({
-        x: wrap(p.x + Math.floor(rng() * 3) - 1, W),
-        y: wrap(p.y + Math.floor(rng() * 3) - 1, H),
+        x: walkable(bx, by) ? bx : p.x,
+        y: walkable(bx, by) ? by : p.y,
         energy: PRED_COST,
         speed: Math.round(mutate(p.speed, 1, 2, 0.5)),
         sense: Math.round(mutate(p.sense, 2, 7, 1)),
@@ -265,13 +329,43 @@ function sample() {
   if (history.length > 2000) history.shift();
 }
 
+// One sentence per fact, all taken from the history, so the caption matches the run.
+function caption() {
+  if (history.length < 2) return '';
+  let peak = history[0], predPeak = 0;
+  for (const p of history) {
+    if (p.n > peak.n) peak = p;
+    predPeak = Math.max(predPeak, p.pred);
+  }
+  const first = history[0];
+  const now = grazers.length;
+  const parts = [`${scen.label}: grazers peaked at ${peak.n} (tick ${peak.tick}), now ${now}.`];
+  if (now === 0) parts.push('The grazers died out.');
+  else if (now < peak.n / 2) parts.push('The population crashed below half its peak.');
+  else parts.push('It is still going.');
+  parts.push(`Predators peaked at ${predPeak}.`);
+  if (floods) parts.push(`${floods} floods.`);
+  parts.push(`Average speed gene ${first.speed.toFixed(2)} at the start, ${(grazers.reduce((s, g) => s + g.speed, 0) / (now || 1)).toFixed(2)} now.`);
+  return parts.join(' ');
+}
+
 function draw() {
   const img = ctx.createImageData(W, H);
+  const flooding = lastFlood && tick - lastFlood.tick < 15;
   for (let i = 0; i < W * H; i++) {
-    const gr = grass[i];
-    img.data[i * 4] = 20;
-    img.data[i * 4 + 1] = 40 + gr * 180;
-    img.data[i * 4 + 2] = 20;
+    const y = Math.floor(i / W);
+    if (!land[i]) {
+      // Water (island scenario).
+      img.data[i * 4] = 10; img.data[i * 4 + 1] = 30; img.data[i * 4 + 2] = 70;
+    } else if (flooding && y >= lastFlood.rows[0] && y <= lastFlood.rows[1]) {
+      // Recent flood band shows blue for a few ticks.
+      img.data[i * 4] = 40; img.data[i * 4 + 1] = 90; img.data[i * 4 + 2] = 160;
+    } else {
+      const gr = grass[i];
+      img.data[i * 4] = 20;
+      img.data[i * 4 + 1] = 40 + gr * 180;
+      img.data[i * 4 + 2] = 20;
+    }
     img.data[i * 4 + 3] = 255;
   }
   for (const g of grazers) {
@@ -289,6 +383,7 @@ function draw() {
     `tick ${tick} | grazers ${grazers.length} | predators ${predators.length} | eaten ${eaten} | ` +
     `births ${births} | deaths ${deaths} | ` +
     `speed ${last.speed.toFixed(2)} sense ${last.sense.toFixed(2)} metabolism ${last.metabolism.toFixed(3)}`;
+  captionEl.textContent = caption();
   scrubEl.max = maxTick;
   scrubEl.value = tick;
 }
@@ -322,9 +417,10 @@ function drawChart() {
   }
 }
 
-seedInput.addEventListener('change', () => { newWorld(seedInput.value.trim() || '1'); draw(); });
+seedInput.addEventListener('change', () => { newWorld(seedInput.value.trim() || '1', scenEl.value); draw(); });
+scenEl.addEventListener('change', () => { newWorld(seedInput.value.trim() || '1', scenEl.value); draw(); });
 document.getElementById('newSeed').addEventListener('click', () => {
-  newWorld(String(Math.floor(Math.random() * 1e9))); draw();
+  newWorld(String(Math.floor(Math.random() * 1e9)), scenEl.value); draw();
 });
 pauseBtn.addEventListener('click', () => {
   paused = !paused; pauseBtn.textContent = paused ? 'play' : 'pause';
@@ -339,7 +435,7 @@ function flashNote(text) {
   setTimeout(() => { if (noteEl.textContent === text) noteEl.textContent = ''; }, 2500);
 }
 document.getElementById('share').addEventListener('click', async () => {
-  const url = `${location.origin}${location.pathname}#${curSeed}@${tick}`;
+  const url = `${location.origin}${location.pathname}#${linkFor(tick)}`;
   try {
     await navigator.clipboard.writeText(url);
     flashNote('share link copied');
@@ -350,7 +446,7 @@ document.getElementById('share').addEventListener('click', async () => {
 document.getElementById('png').addEventListener('click', () => {
   // Composite: world, chart and a short caption, saved as one PNG.
   const out = document.createElement('canvas');
-  out.width = 900; out.height = 500 + 200 + 60;
+  out.width = 900; out.height = 500 + 200 + 90;
   const o = out.getContext('2d');
   o.fillStyle = '#111'; o.fillRect(0, 0, out.width, out.height);
   o.imageSmoothingEnabled = false;
@@ -359,9 +455,10 @@ document.getElementById('png').addEventListener('click', () => {
   o.drawImage(chart, 50, 500, 800, 200);
   o.fillStyle = '#ddd';
   o.font = '14px system-ui, sans-serif';
-  o.fillText(`Tiny Biome Lab | seed ${curSeed} | tick ${tick} | grazers ${grazers.length} | predators ${predators.length}`, 50, 736);
+  o.fillText(`Tiny Biome Lab | seed ${curSeed} | ${curScen} | tick ${tick} | grazers ${grazers.length} | predators ${predators.length}`, 50, 736);
   o.font = '12px system-ui, sans-serif';
-  o.fillText(`births ${births} | deaths ${deaths} | eaten ${eaten} | ${location.origin}${location.pathname}#${curSeed}@${tick}`, 50, 756);
+  o.fillText(caption().slice(0, 130), 50, 756);
+  o.fillText(`births ${births} | deaths ${deaths} | eaten ${eaten} | ${location.origin}${location.pathname}#${linkFor(tick)}`, 50, 776);
   out.toBlob((blob) => {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -395,9 +492,9 @@ function loop(ts) {
   requestAnimationFrame(loop);
 }
 
-// Share link format: #seed or #seed@tick (the tick is capped so the rebuild stays quick).
-const [startSeed, startTick] = decodeURIComponent(location.hash.slice(1)).split('@');
-newWorld(startSeed || '42');
+// Share link format: #seed, #seed@tick or #seed@tick@scenario (the tick is capped so the rebuild stays quick).
+const [startSeed, startTick, startScen] = decodeURIComponent(location.hash.slice(1)).split('@');
+newWorld(startSeed || '42', startScen);
 rewindTo(Math.min(Number(startTick) || 0, 2000));
 draw();
 requestAnimationFrame(loop);
