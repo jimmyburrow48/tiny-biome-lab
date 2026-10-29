@@ -21,6 +21,7 @@
   <label>seed <input id="seed" size="10"></label>
   <button id="newSeed">new seed</button>
   <button id="pause">pause</button>
+  <button id="csv">export csv</button>
   <label>speed <input id="speed" type="range" min="1" max="30" value="8"></label>
 </header>
 <canvas id="world" width="80" height="50" style="width:800px;height:500px"></canvas>
@@ -28,12 +29,13 @@
 <canvas id="chart" width="800" height="200"></canvas>
 <div id="legend">
   <span style="color:#f0c850">grazers</span>
+  <span style="color:#ff4d4d">predators</span>
   <span style="color:#7fd3ff">speed gene</span>
   <span style="color:#ff8fb1">sense gene</span>
   <span style="color:#b6ff7f">metabolism gene</span>
   <span style="opacity:0.6">each line scaled to its own range</span>
 </div>
-<footer>Same seed, same history. M2: genes mutate on breeding, population chart shows the drift.</footer>
+<footer>Same seed, same history. M2: genes mutate on breeding. M3: red predators hunt grazers; export csv for the full history.</footer>
 
 <script>
 // Seeded PRNG (mulberry32): same seed always gives the same world.
@@ -55,6 +57,12 @@ const BREED_COST = 8;      // energy the parent pays (the child starts with 8)
 const REGROW = 0.006;     // grass regrowth per cell per tick
 const CROWD_COST = 0.15;   // extra energy each grazer loses per tick at full population
 const SAMPLE_EVERY = 5;    // record history every N ticks
+const PRED_CAP = 30;       // hard cap on predators
+const PRED_AT = 25;        // predator energy needed to breed
+const PRED_COST = 12;      // energy a predator pays to breed (the child starts with 12)
+const PRED_EAT = 6;        // energy a predator gains per grazer eaten
+const HUNT_SUCCESS = 0.25; // chance a predator in reach actually lands a bite
+const PRED_METAB = 0.4;    // energy a predator uses per tick, per speed point
 const canvas = document.getElementById('world');
 const ctx = canvas.getContext('2d');
 const chart = document.getElementById('chart');
@@ -64,8 +72,8 @@ const seedInput = document.getElementById('seed');
 const speedInput = document.getElementById('speed');
 const pauseBtn = document.getElementById('pause');
 
-let rng, grass, grazers, tick, paused = false;
-let births = 0, deaths = 0, history = [];
+let rng, grass, grazers, predators, tick, paused = false;
+let births = 0, deaths = 0, eaten = 0, pDeaths = 0, history = [];
 
 function hashSeed(str) {
   // Turns a text seed into a 32-bit number. Numbers pass through.
@@ -99,14 +107,31 @@ function newWorld(seedText) {
       metabolism: 0.08 + rng() * 0.08,    // gene: energy used per tick
     });
   }
+  predators = [];
+  for (let i = 0; i < 4; i++) {
+    predators.push({
+      x: Math.floor(rng() * W), y: Math.floor(rng() * H),
+      energy: 12,
+      speed: 1 + Math.floor(rng() * 2),   // gene: cells per tick (1..2), costs more energy when fast
+      sense: 3 + Math.floor(rng() * 3),   // gene: how far it can smell a grazer (3..5)
+    });
+  }
   tick = 0;
   births = 0;
   deaths = 0;
+  eaten = 0;
+  pDeaths = 0;
   history = [];
   sample();
 }
 
 function wrap(v, max) { return (v + max) % max; }
+
+// Shortest signed distance between two cells on the wrapped grid.
+function wrapDelta(d, max) {
+  d = ((d % max) + max) % max;
+  return d > max / 2 ? d - max : d;
+}
 
 function step() {
   tick++;
@@ -155,14 +180,63 @@ function step() {
     next.push(g);
   }
   grazers = next.concat(babies);
+  predatorStep();
   if (tick % SAMPLE_EVERY === 0) sample();
+}
+
+// Predators hunt the nearest grazer they can smell, wander when there is none,
+// eat anything within one cell, and breed when full.
+function predatorStep() {
+  const alive = [];
+  const babies = [];
+  for (const p of predators) {
+    let target = null, bestD = Infinity;
+    for (const g of grazers) {
+      const d = Math.max(Math.abs(wrapDelta(g.x - p.x, W)), Math.abs(wrapDelta(g.y - p.y, H)));
+      if (d <= p.sense && d < bestD) { bestD = d; target = g; }
+    }
+    for (let s = 0; s < p.speed; s++) {
+      if (target) {
+        const dx = wrapDelta(target.x - p.x, W), dy = wrapDelta(target.y - p.y, H);
+        if (dx === 0 && dy === 0) break;
+        if (Math.abs(dx) >= Math.abs(dy)) p.x = wrap(p.x + Math.sign(dx), W);
+        else p.y = wrap(p.y + Math.sign(dy), H);
+      } else {
+        const r = rng();
+        if (r < 0.25) p.x = wrap(p.x + 1, W);
+        else if (r < 0.5) p.x = wrap(p.x - 1, W);
+        else if (r < 0.75) p.y = wrap(p.y + 1, H);
+        else p.y = wrap(p.y - 1, H);
+      }
+    }
+    // Eat a grazer within one cell (the victim is removed at once, so no double meals).
+    const i = grazers.findIndex(g =>
+      Math.abs(wrapDelta(g.x - p.x, W)) <= 1 && Math.abs(wrapDelta(g.y - p.y, H)) <= 1);
+    if (i >= 0 && rng() < HUNT_SUCCESS) { grazers.splice(i, 1); eaten++; p.energy += PRED_EAT; }
+
+    p.energy -= PRED_METAB * p.speed;
+    if (p.energy <= 0) { pDeaths++; continue; }
+    // Cap check uses the old count, so survivors plus babies can never pass PRED_CAP.
+    if (p.energy >= PRED_AT && predators.length + babies.length < PRED_CAP) {
+      p.energy -= PRED_COST;
+      babies.push({
+        x: wrap(p.x + Math.floor(rng() * 3) - 1, W),
+        y: wrap(p.y + Math.floor(rng() * 3) - 1, H),
+        energy: PRED_COST,
+        speed: Math.round(mutate(p.speed, 1, 2, 0.5)),
+        sense: Math.round(mutate(p.sense, 2, 7, 1)),
+      });
+    }
+    alive.push(p);
+  }
+  predators = alive.concat(babies);
 }
 
 function sample() {
   const n = grazers.length;
   const avg = (k) => n ? grazers.reduce((s, g) => s + g[k], 0) / n : 0;
   history.push({
-    tick, n, births, deaths,
+    tick, n, pred: predators.length, births, deaths, eaten,
     speed: avg('speed'), sense: avg('sense'), metabolism: avg('metabolism'),
   });
   if (history.length > 2000) history.shift();
@@ -181,11 +255,16 @@ function draw() {
     const i = (g.y * W + g.x) * 4;
     img.data[i] = 240; img.data[i + 1] = 200; img.data[i + 2] = 80;
   }
+  for (const p of predators) {
+    const i = (p.y * W + p.x) * 4;
+    img.data[i] = 255; img.data[i + 1] = 70; img.data[i + 2] = 70;
+  }
   ctx.putImageData(img, 0, 0);
   drawChart();
   const last = history[history.length - 1] || { speed: 0 };
   statsEl.textContent =
-    `tick ${tick} | grazers ${grazers.length} | births ${births} | deaths ${deaths} | ` +
+    `tick ${tick} | grazers ${grazers.length} | predators ${predators.length} | eaten ${eaten} | ` +
+    `births ${births} | deaths ${deaths} | ` +
     `speed ${last.speed.toFixed(2)} sense ${last.sense.toFixed(2)} metabolism ${last.metabolism.toFixed(3)}`;
 }
 
@@ -199,6 +278,7 @@ function drawChart() {
   // Each line is scaled to its own gene range so they all fit the same chart.
   const lines = [
     { c: '#f0c850', f: p => p.n / maxN },
+    { c: '#ff4d4d', f: p => p.pred / PRED_CAP },
     { c: '#7fd3ff', f: p => (p.speed - 1) / 2 },
     { c: '#ff8fb1', f: p => (p.sense - 2) / 6 },
     { c: '#b6ff7f', f: p => (p.metabolism - 0.04) / 0.16 },
@@ -223,6 +303,17 @@ document.getElementById('newSeed').addEventListener('click', () => {
 });
 pauseBtn.addEventListener('click', () => {
   paused = !paused; pauseBtn.textContent = paused ? 'play' : 'pause';
+});
+document.getElementById('csv').addEventListener('click', () => {
+  const cols = ['tick', 'grazers', 'predators', 'births', 'deaths', 'eaten', 'speed', 'sense', 'metabolism'];
+  const rows = history.map(p => [p.tick, p.n, p.pred, p.births, p.deaths, p.eaten, p.speed, p.sense, p.metabolism]
+    .map(v => typeof v === 'number' && !Number.isInteger(v) ? v.toFixed(4) : v).join(','));
+  const blob = new Blob([cols.join(',') + '\n' + rows.join('\n') + '\n'], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `tiny-biome-${seedInput.value || 'run'}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 });
 
 // Run loop: speed slider = steps per second.
