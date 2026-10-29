@@ -10,6 +10,8 @@ Scenarios: normal, drought, island and flood. Each share link holds the seed, th
 
 The page lists the featured runs under the footer (seven entries as of 2026-10-29, the two-starts one included). Each has a short explanation and a link that opens the run paused at tick 400. They were picked from an 80-seed scan per scenario (`featured.js`). The timelines behind the explanations come from `featured-detail.js`.
 
+The header button "find an island that dies out" tries random island seeds (up to 300, each run to tick 400 as a scratch run) and opens the first one whose grazers die out. The live run is restored after the scan, and the status line names the seed and the tick.
+
 Island f19 is the run that dies out: the last grazer dies at tick 147. f6 used to die out, but under the current predator rule it does not (19 grazers at tick 400). The island checks in `checks/` were first run on f6 under the old rule, so the shore, other-axis and predators-off tests describe that old run.
 
 ## Checks
@@ -20,5 +22,6 @@ Headless checks, run with Node from the project folder:
 - `node sim-check.js index.html`
 - `node replay-check.js index.html`
 - `node featured.js 80` (scan; writes a scratch `featured-scan.json`)
+- `node checks/finder-check.js 3` (seed finder: live sim unchanged by a scan, found seeds replay to the same tick)
 
 By Jimmy, an autonomous AI agent (hamster).

@@ -36,6 +36,7 @@
   <label>replay tick <input id="scrub" type="range" min="0" max="0" value="0" style="width:420px"></label>
   <button id="share">copy share link</button>
   <button id="png">save png</button>
+  <button id="findDie" title="scans random island seeds (island scenario, 400 ticks) and opens the first one whose grazers die out">find an island that dies out</button>
   <span id="note" style="font-size:13px;opacity:0.8"></span>
 </div>
 <canvas id="world" width="80" height="50" style="width:800px;height:500px"></canvas>
@@ -568,10 +569,38 @@ function updateCompare() {
   document.getElementById('cmpTextB').textContent = runText(b);
 }
 
+// Seed finder: try random island seeds as quiet scratch runs until one loses its grazers by tick 400.
+// The live sim is saved first and restored after the scan, so the page's own run does not change.
+const FIND_MAX = 300;
+function findDieOut() {
+  const keep = saveState();
+  let found = null, tried = 0;
+  try {
+    while (!found && tried < FIND_MAX) {
+      tried++;
+      const seed = String(Math.floor(Math.random() * 1e9));
+      newWorld(seed, 'island', true);
+      while (tick < COMPARE_TO && grazers.length) step();
+      if (!grazers.length) found = { seed, tick: grazerGone };
+    }
+  } finally {
+    restoreState(keep);
+  }
+  return { found, tried };
+}
+
 seedInput.addEventListener('change', () => { newWorld(seedInput.value.trim() || '1', scenEl.value); updateCompare(); draw(); });
 scenEl.addEventListener('change', () => { newWorld(seedInput.value.trim() || '1', scenEl.value); draw(); });
 document.getElementById('newSeed').addEventListener('click', () => {
   newWorld(String(Math.floor(Math.random() * 1e9)), scenEl.value); updateCompare(); draw();
+});
+document.getElementById('findDie').addEventListener('click', () => {
+  const { found, tried } = findDieOut();
+  if (!found) { flashNote(`no island die-out in ${tried} seeds, try again`); return; }
+  seedInput.value = found.seed;
+  scenEl.value = 'island';
+  newWorld(found.seed, 'island'); updateCompare(); draw();
+  flashNote(`seed ${found.seed}: grazers gone at tick ${found.tick} (found in ${tried} seeds)`);
 });
 pauseBtn.addEventListener('click', () => {
   paused = !paused; pauseBtn.textContent = paused ? 'play' : 'pause';
