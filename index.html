@@ -47,7 +47,7 @@
   <span style="color:#7fd3ff">speed gene</span>
   <span style="color:#ff8fb1">sense gene</span>
   <span style="color:#b6ff7f">metabolism gene</span>
-  <span style="opacity:0.6">each line scaled to its own range</span>
+  <span style="opacity:0.6">each line scaled to its own range; dashed line = the tick that kind first died out</span>
 </div>
 <footer>Same seed, same history. M2: genes mutate on breeding. M3: red predators hunt grazers; export csv for the full history. M4: share link holds seed and tick (#seed@tick); drag the replay tick to rewind or fast-forward. M5: scenarios (drought, island, flood) with an auto-written caption; share links add @scenario. Island runs changed on 2026-10-28 (two predators at the start, so island links made before then open a different run); island-old opens the island as it was. Free to play. Tips are optional (pay what you want, $0 is fine): <a href="https://jimmyburrow48.itch.io/tiny-biome-lab">jimmyburrow48.itch.io/tiny-biome-lab</a></footer>
 <section id="featured" style="max-width:800px;font-size:14px;padding:8px 0;line-height:1.45">
@@ -115,6 +115,7 @@ const captionEl = document.getElementById('caption');
 let rng, grass, grazers, predators, tick, paused = false;
 let births = 0, deaths = 0, eaten = 0, pDeaths = 0, history = [];
 let land, floods = 0, lastFlood = null;
+let grazerGone = null, predGone = null; // exact tick each kind first hit zero (set in step, not from the 5-tick history sample)
 let curSeed = '42', curScen = 'normal', maxTick = 0; // maxTick: furthest tick reached for this seed (the replay limit)
 let scen = SCENARIOS.normal;
 
@@ -194,6 +195,8 @@ function newWorld(seedText, scenName) {
   pDeaths = 0;
   floods = 0;
   lastFlood = null;
+  grazerGone = null;
+  predGone = null;
   history = [];
   sample();
 }
@@ -225,7 +228,7 @@ function saveState() {
   return {
     curSeed, curScen, maxTick, tick,
     rng: rng.state(),
-    births, deaths, eaten, pDeaths, floods,
+    births, deaths, eaten, pDeaths, floods, grazerGone, predGone,
     lastFlood: lastFlood ? { rows: lastFlood.rows.slice(), tick: lastFlood.tick } : null,
     land: Array.from(land), grass: Array.from(grass), // plain arrays: a typed array would turn into an object in JSON
     grazers: grazers.map(g => ({ ...g })),
@@ -238,6 +241,7 @@ function restoreState(s) {
   maxTick = s.maxTick; tick = s.tick;
   rng = makeRng(s.rng); // makeRng keeps its argument as the raw 32-bit state, so this resumes the exact sequence
   births = s.births; deaths = s.deaths; eaten = s.eaten; pDeaths = s.pDeaths; floods = s.floods;
+  grazerGone = s.grazerGone; predGone = s.predGone;
   lastFlood = s.lastFlood ? { rows: s.lastFlood.rows.slice(), tick: s.lastFlood.tick } : null;
   land = Uint8Array.from(s.land); grass = Float32Array.from(s.grass); // back to the typed arrays the sim uses
   grazers = s.grazers.map(g => ({ ...g }));
@@ -309,6 +313,9 @@ function step() {
   }
   grazers = next.concat(babies);
   predatorStep();
+  // First tick each kind is gone for good (breeding needs a parent, so it cannot come back).
+  if (grazerGone === null && grazers.length === 0) grazerGone = tick;
+  if (predGone === null && predators.length === 0) predGone = tick;
   if (tick % SAMPLE_EVERY === 0) sample();
 }
 
@@ -384,10 +391,11 @@ function caption() {
   const first = history[0];
   const now = grazers.length;
   const parts = [`${scen.label}: grazers peaked at ${peak.n} (tick ${peak.tick}), now ${now}.`];
-  if (now === 0) parts.push('The grazers died out.');
+  if (now === 0) parts.push(grazerGone !== null ? `The grazers died out at tick ${grazerGone}.` : 'The grazers died out.');
   else if (now < peak.n / 2) parts.push('The population crashed below half its peak.');
   else parts.push('It is still going.');
   parts.push(`Predators peaked at ${predPeak}.`);
+  if (predGone !== null) parts.push(`Predators gone from tick ${predGone}.`);
   if (floods) parts.push(`${floods} floods.`);
   parts.push(`Average speed gene ${first.speed.toFixed(2)} at the start, ${(grazers.reduce((s, g) => s + g.speed, 0) / (now || 1)).toFixed(2)} now.`);
   return parts.join(' ');
@@ -437,7 +445,7 @@ function drawChart() {
   cctx.fillStyle = '#000';
   cctx.fillRect(0, 0, w, h);
   if (history.length < 2) return;
-  const t0 = history[0].tick, t1 = history[history.length - 1].tick || 1;
+  const t0 = history[0].tick, t1 = Math.max(history[history.length - 1].tick, grazerGone || 0, predGone || 0) || 1;
   const maxN = Math.max(MAX_GRAZERS, ...history.map(p => p.n));
   // Each line is scaled to its own gene range so they all fit the same chart.
   const lines = [
@@ -459,6 +467,19 @@ function drawChart() {
     });
     cctx.stroke();
   }
+  // Extinction markers: the exact tick a kind first hit zero (from the sim, not rounded to the 5-tick sample).
+  const marks = [[grazerGone, '#f0c850', 'grazers gone'], [predGone, '#ff4d4d', 'predators gone']];
+  marks.forEach(([t, c, label], i) => {
+    if (t === null) return;
+    const x = X({ tick: t }), right = x > w / 2;
+    cctx.strokeStyle = c; cctx.lineWidth = 1; cctx.setLineDash([4, 4]);
+    cctx.beginPath(); cctx.moveTo(x, pad); cctx.lineTo(x, h - pad); cctx.stroke();
+    cctx.setLineDash([]);
+    cctx.fillStyle = c; cctx.font = '12px system-ui, sans-serif';
+    cctx.textAlign = right ? 'right' : 'left';
+    cctx.fillText(`${label} t${t}`, x + (right ? -4 : 4), pad + 12 + i * 14);
+    cctx.textAlign = 'left';
+  });
 }
 
 seedInput.addEventListener('change', () => { newWorld(seedInput.value.trim() || '1', scenEl.value); draw(); });
