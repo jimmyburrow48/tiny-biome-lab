@@ -24,6 +24,12 @@
   <button id="csv">export csv</button>
   <label>speed <input id="speed" type="range" min="1" max="30" value="8"></label>
 </header>
+<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;justify-content:center">
+  <label>replay tick <input id="scrub" type="range" min="0" max="0" value="0" style="width:420px"></label>
+  <button id="share">copy share link</button>
+  <button id="png">save png</button>
+  <span id="note" style="font-size:13px;opacity:0.8"></span>
+</div>
 <canvas id="world" width="80" height="50" style="width:800px;height:500px"></canvas>
 <div id="stats"></div>
 <canvas id="chart" width="800" height="200"></canvas>
@@ -35,7 +41,7 @@
   <span style="color:#b6ff7f">metabolism gene</span>
   <span style="opacity:0.6">each line scaled to its own range</span>
 </div>
-<footer>Same seed, same history. M2: genes mutate on breeding. M3: red predators hunt grazers; export csv for the full history.</footer>
+<footer>Same seed, same history. M2: genes mutate on breeding. M3: red predators hunt grazers; export csv for the full history. M4: share link holds seed and tick (#seed@tick); drag the replay tick to rewind or fast-forward.</footer>
 
 <script>
 // Seeded PRNG (mulberry32): same seed always gives the same world.
@@ -71,9 +77,12 @@ const statsEl = document.getElementById('stats');
 const seedInput = document.getElementById('seed');
 const speedInput = document.getElementById('speed');
 const pauseBtn = document.getElementById('pause');
+const scrubEl = document.getElementById('scrub');
+const noteEl = document.getElementById('note');
 
 let rng, grass, grazers, predators, tick, paused = false;
 let births = 0, deaths = 0, eaten = 0, pDeaths = 0, history = [];
+let curSeed = '42', maxTick = 0; // maxTick: furthest tick reached for this seed (the replay limit)
 
 function hashSeed(str) {
   // Turns a text seed into a 32-bit number. Numbers pass through.
@@ -92,6 +101,9 @@ function mutate(v, lo, hi, step) {
 }
 
 function newWorld(seedText) {
+  seedText = String(seedText).replace(/[@#]/g, ''); // these characters separate the share link parts
+  curSeed = seedText;
+  maxTick = 0;
   seedInput.value = seedText;
   location.hash = seedText;
   rng = makeRng(hashSeed(seedText));
@@ -133,8 +145,19 @@ function wrapDelta(d, max) {
   return d > max / 2 ? d - max : d;
 }
 
+// The world is a pure function of (seed, tick), so any tick can be rebuilt by replaying from the seed.
+function rewindTo(target) {
+  if (target < tick) {
+    const keep = maxTick;
+    newWorld(curSeed);
+    maxTick = keep;
+  }
+  while (tick < target) step();
+}
+
 function step() {
   tick++;
+  if (tick > maxTick) maxTick = tick;
   // Grass regrows slowly.
   for (let i = 0; i < grass.length; i++) grass[i] = Math.min(1, grass[i] + REGROW);
 
@@ -266,6 +289,8 @@ function draw() {
     `tick ${tick} | grazers ${grazers.length} | predators ${predators.length} | eaten ${eaten} | ` +
     `births ${births} | deaths ${deaths} | ` +
     `speed ${last.speed.toFixed(2)} sense ${last.sense.toFixed(2)} metabolism ${last.metabolism.toFixed(3)}`;
+  scrubEl.max = maxTick;
+  scrubEl.value = tick;
 }
 
 function drawChart() {
@@ -304,6 +329,48 @@ document.getElementById('newSeed').addEventListener('click', () => {
 pauseBtn.addEventListener('click', () => {
   paused = !paused; pauseBtn.textContent = paused ? 'play' : 'pause';
 });
+scrubEl.addEventListener('input', () => {
+  paused = true; pauseBtn.textContent = 'play';
+  rewindTo(Number(scrubEl.value));
+  draw();
+});
+function flashNote(text) {
+  noteEl.textContent = text;
+  setTimeout(() => { if (noteEl.textContent === text) noteEl.textContent = ''; }, 2500);
+}
+document.getElementById('share').addEventListener('click', async () => {
+  const url = `${location.origin}${location.pathname}#${curSeed}@${tick}`;
+  try {
+    await navigator.clipboard.writeText(url);
+    flashNote('share link copied');
+  } catch (e) {
+    prompt('Copy this share link', url); // clipboard blocked: show the link instead
+  }
+});
+document.getElementById('png').addEventListener('click', () => {
+  // Composite: world, chart and a short caption, saved as one PNG.
+  const out = document.createElement('canvas');
+  out.width = 900; out.height = 500 + 200 + 60;
+  const o = out.getContext('2d');
+  o.fillStyle = '#111'; o.fillRect(0, 0, out.width, out.height);
+  o.imageSmoothingEnabled = false;
+  o.drawImage(canvas, 50, 0, 800, 500);
+  o.imageSmoothingEnabled = true;
+  o.drawImage(chart, 50, 500, 800, 200);
+  o.fillStyle = '#ddd';
+  o.font = '14px system-ui, sans-serif';
+  o.fillText(`Tiny Biome Lab | seed ${curSeed} | tick ${tick} | grazers ${grazers.length} | predators ${predators.length}`, 50, 736);
+  o.font = '12px system-ui, sans-serif';
+  o.fillText(`births ${births} | deaths ${deaths} | eaten ${eaten} | ${location.origin}${location.pathname}#${curSeed}@${tick}`, 50, 756);
+  out.toBlob((blob) => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `tiny-biome-${curSeed}-t${tick}.png`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }, 'image/png');
+  flashNote('png saved');
+});
 document.getElementById('csv').addEventListener('click', () => {
   const cols = ['tick', 'grazers', 'predators', 'births', 'deaths', 'eaten', 'speed', 'sense', 'metabolism'];
   const rows = history.map(p => [p.tick, p.n, p.pred, p.births, p.deaths, p.eaten, p.speed, p.sense, p.metabolism]
@@ -328,7 +395,10 @@ function loop(ts) {
   requestAnimationFrame(loop);
 }
 
-newWorld((location.hash.slice(1)) || '42');
+// Share link format: #seed or #seed@tick (the tick is capped so the rebuild stays quick).
+const [startSeed, startTick] = decodeURIComponent(location.hash.slice(1)).split('@');
+newWorld(startSeed || '42');
+rewindTo(Math.min(Number(startTick) || 0, 2000));
 draw();
 requestAnimationFrame(loop);
 </script>
