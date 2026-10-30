@@ -39,10 +39,10 @@
   <button id="findDie" title="scans random island seeds (island scenario, 400 ticks) and opens the first one whose grazers die out">find an island that dies out</button>
   <span id="note" style="font-size:13px;opacity:0.8"></span>
 </div>
-<canvas id="world" width="80" height="50" style="width:800px;height:500px"></canvas>
+<canvas id="world" role="img" aria-label="the island map: one dot per creature on the grass, grazers in yellow and predators in red, redrawn each tick" width="80" height="50" style="width:800px;height:500px"></canvas>
 <div id="stats"></div>
 <div id="caption" style="font-size:14px;max-width:800px;min-height:40px;padding:4px 0;text-align:center"></div>
-<canvas id="chart" width="800" height="200"></canvas>
+<canvas id="chart" role="img" aria-label="chart of the run over time: grazers, predators and three genes, one line each. the legend below names the lines" width="800" height="200"></canvas>
 <div id="legend">
   <span style="color:#f0c850">grazers</span>
   <span style="color:#ff4d4d">predators</span>
@@ -56,12 +56,12 @@
   <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;padding-top:6px">
     <div style="width:390px">
       <div>island: two predators at start (current rule)</div>
-      <canvas id="cmpA" width="390" height="200" style="width:390px;height:200px"></canvas>
+      <canvas id="cmpA" role="img" aria-label="the same seed with two predators at the start (current rule): grazers and predators over the run, shown as a chart" width="390" height="200" style="width:390px;height:200px"></canvas>
       <div id="cmpTextA" style="font-size:13px;min-height:36px;padding-top:4px"></div>
     </div>
     <div style="width:390px">
       <div>island-old: four predators at start</div>
-      <canvas id="cmpB" width="390" height="200" style="width:390px;height:200px"></canvas>
+      <canvas id="cmpB" role="img" aria-label="the same seed with four predators at the start (old rule): grazers and predators over the run, shown as a chart" width="390" height="200" style="width:390px;height:200px"></canvas>
       <div id="cmpTextB" style="font-size:13px;min-height:36px;padding-top:4px"></div>
     </div>
   </div>
